@@ -12,11 +12,12 @@ from agent_todo_impl.planning.plan_parser import TodoItem
 @dataclass(frozen=True)
 class CursorAgentConfig:
     workspace: Path
-    model: str | None = None
+    model: str = "auto"
     api_key: str | None = None
     trust: bool = True
-    force: bool = False
-    output_format: str = "json"
+    force: bool = True
+    output_format: str = "stream-json"
+    stream_partial_output: bool = True
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,10 @@ def build_cursor_agent_command(cfg: CursorAgentConfig, *, prompt: str) -> list[s
         "--print",
         "--output-format",
         cfg.output_format,
+    ]
+    if cfg.stream_partial_output:
+        cmd.append("--stream-partial-output")
+    cmd += [
         "--workspace",
         str(cfg.workspace),
     ]
@@ -64,8 +69,7 @@ def build_cursor_agent_command(cfg: CursorAgentConfig, *, prompt: str) -> list[s
         cmd.append("--trust")
     if cfg.force:
         cmd.append("--force")
-    if cfg.model:
-        cmd += ["--model", cfg.model]
+    cmd += ["--model", cfg.model]
     # Prefer explicit flag; fallback to env var handled by cursor-agent itself
     api_key = cfg.api_key or os.getenv("CURSOR_API_KEY")
     if api_key:

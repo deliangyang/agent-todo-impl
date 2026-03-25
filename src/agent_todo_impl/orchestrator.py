@@ -25,8 +25,8 @@ class OrchestratorConfig:
     model: str
     max_review_rounds: int = 3
     executor: str = "internal"  # internal | cursor
-    cursor_model: str | None = None
-    cursor_force: bool = False
+    cursor_model: str = "auto"
+    cursor_force: bool = True
 
 
 @dataclass(frozen=True)

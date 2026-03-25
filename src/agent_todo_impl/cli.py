@@ -28,7 +28,7 @@ def plan(
     emit_cursor: bool = typer.Option(
         False, help="同时输出可直接交给 cursor-agent 执行的 prompt/command"
     ),
-    cursor_model: Optional[str] = typer.Option(None, help="cursor-agent 使用的 model（可选）"),
+    cursor_model: Optional[str] = typer.Option(None, help="cursor-agent 使用的 model（默认 auto）"),
 ):
     """读取 md，调用 AI 生成 /plan todo（不改代码）。"""
     ctx = collect_markdown_context(md_path)
@@ -43,7 +43,7 @@ def plan(
             repo_snapshot_hint="python project with pyproject.toml, src/agent_todo_impl, tests/",
         )
         cmd = build_cursor_agent_command(
-            CursorAgentConfig(workspace=Path.cwd(), model=cursor_model),
+            CursorAgentConfig(workspace=Path.cwd(), model=cursor_model or "auto"),
             prompt=cursor_prompt,
         )
         cursor_payload = {
@@ -69,8 +69,8 @@ def run(
     md_path: Path = typer.Option(..., exists=True, readable=True, help="目录或单个 md 文件"),
     model: str = typer.Option("gpt-4.1-mini", envvar="AGENT_TODO_MODEL"),
     executor: str = typer.Option("internal", help="执行器：internal | cursor"),
-    cursor_model: Optional[str] = typer.Option(None, help="cursor-agent 使用的 model（可选）"),
-    cursor_force: bool = typer.Option(False, help="cursor-agent 允许强制执行（--force）"),
+    cursor_model: Optional[str] = typer.Option(None, help="cursor-agent 使用的 model（默认 auto）"),
+    cursor_force: bool = typer.Option(True, help="cursor-agent 允许强制执行（--force）"),
 ):
     """完整闭环：plan -> implement -> review(<=3) -> 自动提交（独立分支）。"""
     orchestrator = Orchestrator(
@@ -79,7 +79,7 @@ def run(
             md_path=md_path,
             model=model,
             executor=executor,
-            cursor_model=cursor_model,
+            cursor_model=cursor_model or "auto",
             cursor_force=cursor_force,
         )
     )
