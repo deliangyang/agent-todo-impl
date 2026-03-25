@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,7 +14,10 @@ class GateResult:
 
 
 def _run(cmd: list[str], *, cwd: Path) -> tuple[int, str]:
-    p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+    env = os.environ.copy()
+    # Avoid global pytest plugins pulling in optional native deps.
+    env.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, env=env)
     out = (p.stdout or "") + (("\n" + p.stderr) if p.stderr else "")
     return p.returncode, out.strip()
 
@@ -26,7 +31,7 @@ def run_quality_gates(repo_root: Path) -> GateResult:
     rc, out = _run(["ruff", "check"], cwd=repo_root)
     codes.append(("ruff check", rc, out))
 
-    rc, out = _run(["pytest"], cwd=repo_root)
+    rc, out = _run([sys.executable, "-m", "pytest"], cwd=repo_root)
     codes.append(("pytest", rc, out))
 
     ok = all(rc == 0 for _, rc, _ in codes)

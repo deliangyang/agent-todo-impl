@@ -23,11 +23,23 @@
  agent-todo plan --md-path docs/
  ```
  
+- 生成 plan，并输出可交付给 Cursor CLI agent 的执行载荷（prompt/command）
+
+```bash
+agent-todo plan --md-path docs/ --emit-cursor
+```
+
  - 执行完整闭环（建分支、改代码、review 循环、自动提交）
  
  ```bash
  agent-todo run --md-path docs/
  ```
  
+- 用 Cursor CLI agent 执行 todo（实现交给 `cursor-agent`，其余闭环不变）
+
+```bash
+agent-todo run --md-path docs/ --executor cursor
+```
+
  ### 约束
  - 不做 `git merge`。\n+ - 不做任何 `git push`，也不会使用 `push --force`。

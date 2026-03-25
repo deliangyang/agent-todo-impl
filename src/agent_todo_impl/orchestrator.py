@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent_todo_impl.execution.cursor_agent import (
+    CursorAgentConfig,
+    build_cursor_agent_prompt,
+    run_cursor_agent,
+)
 from agent_todo_impl.execution.executor import Executor, ExecutorConfig
 from agent_todo_impl.git.git_manager import GitManager
 from agent_todo_impl.llm.openai_client import OpenAIClient, OpenAIClientConfig
@@ -19,6 +24,9 @@ class OrchestratorConfig:
     md_path: Path
     model: str
     max_review_rounds: int = 3
+    executor: str = "internal"  # internal | cursor
+    cursor_model: str | None = None
+    cursor_force: bool = False
 
 
 @dataclass(frozen=True)
@@ -30,6 +38,7 @@ class OrchestratorResult:
     gates_ok: bool
     gates_output: str
     review: dict
+    cursor: dict | None = None
 
     def model_dump(self) -> dict:
         return {
@@ -40,6 +49,7 @@ class OrchestratorResult:
             "gates_ok": self.gates_ok,
             "gates_output": self.gates_output,
             "review": self.review,
+            "cursor": self.cursor,
         }
 
 
@@ -63,7 +73,22 @@ class Orchestrator:
         plan_text = self._llm.complete_text(plan_prompt)
         todos = parse_plan_text_to_todos(plan_text)
 
-        self._executor.execute(todos, repo_snapshot_hint=self._snapshot_hint())
+        cursor_runs: list[dict] = []
+        if self._config.executor == "cursor":
+            prompt = build_cursor_agent_prompt(todos, repo_snapshot_hint=self._snapshot_hint())
+            run = run_cursor_agent(
+                CursorAgentConfig(
+                    workspace=self._config.repo_root,
+                    model=self._config.cursor_model,
+                    force=self._config.cursor_force,
+                ),
+                prompt=prompt,
+            )
+            cursor_runs.append(run.model_dump())
+            if run.exit_code != 0:
+                raise RuntimeError(f"cursor-agent failed (exit={run.exit_code})")
+        else:
+            self._executor.execute(todos, repo_snapshot_hint=self._snapshot_hint())
         gates = run_quality_gates(self._config.repo_root)
         self._git.add_all()
         self._git.commit("implement todos")
@@ -83,7 +108,23 @@ class Orchestrator:
                 TodoItem(id=f"review-{i+1}", content=f"{f.level}: {f.message}")
                 for i, f in enumerate(review.findings)
             ]
-            self._executor.execute(fix_todos, repo_snapshot_hint=self._snapshot_hint())
+            if self._config.executor == "cursor":
+                prompt = build_cursor_agent_prompt(
+                    fix_todos, repo_snapshot_hint=self._snapshot_hint()
+                )
+                run = run_cursor_agent(
+                    CursorAgentConfig(
+                        workspace=self._config.repo_root,
+                        model=self._config.cursor_model,
+                        force=self._config.cursor_force,
+                    ),
+                    prompt=prompt,
+                )
+                cursor_runs.append(run.model_dump())
+                if run.exit_code != 0:
+                    raise RuntimeError(f"cursor-agent failed (exit={run.exit_code})")
+            else:
+                self._executor.execute(fix_todos, repo_snapshot_hint=self._snapshot_hint())
             gates = run_quality_gates(self._config.repo_root)
             self._git.add_all()
             self._git.commit(f"review fix round {rounds}")
@@ -96,4 +137,5 @@ class Orchestrator:
             gates_ok=gates.ok,
             gates_output=gates.output,
             review=review_dump,
+            cursor={"runs": cursor_runs} if cursor_runs else None,
         )
