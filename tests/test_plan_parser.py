@@ -12,3 +12,15 @@ def test_parse_plan_lines():
     todos = parse_plan_text_to_todos(text)
     assert len(todos) == 2
     assert todos[0].content == "第一件事"
+
+
+def test_parse_plan_json_fenced_code_block():
+    text = """/plan
+- something
+
+```json
+{"todos":[{"id":"a-b","content":"Do it"}]}
+```
+"""
+    todos = parse_plan_text_to_todos(text)
+    assert [(t.id, t.content) for t in todos] == [("a-b", "Do it")]

@@ -15,6 +15,7 @@ class TodoItem:
 
 
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}\s*$")
+_FENCED_CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
 
 
 def _coerce_id(raw: str, *, fallback: str) -> str:
@@ -31,6 +32,26 @@ def parse_plan_text_to_todos(plan_text: str) -> list[TodoItem]:
     plan_text = (plan_text or "").strip()
     if not plan_text:
         return []
+
+    # First: try to find a fenced JSON code block (common model output)
+    fenced_blocks = _FENCED_CODE_BLOCK_RE.findall(plan_text)
+    for block in reversed(fenced_blocks):
+        candidate = block.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        todos = data.get("todos", [])
+        out: list[TodoItem] = []
+        for i, t in enumerate(todos):
+            content = str(t.get("content", "")).strip()
+            tid = _coerce_id(str(t.get("id", "")).strip(), fallback=f"todo-{i+1}")
+            if content:
+                out.append(TodoItem(id=tid, content=content))
+        if out:
+            return out
 
     m = _JSON_BLOCK_RE.search(plan_text)
     if m:
