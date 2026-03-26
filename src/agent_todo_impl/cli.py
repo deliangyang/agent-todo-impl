@@ -17,6 +17,7 @@ from agent_todo_impl.mdscan import collect_markdown_context
 from agent_todo_impl.orchestrator import Orchestrator, OrchestratorConfig
 from agent_todo_impl.planning.plan_generator import build_plan_prompt
 from agent_todo_impl.planning.plan_parser import parse_plan_text_to_todos
+from agent_todo_impl.project_scan import resolve_project_root
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -38,12 +39,13 @@ def plan(
     todos = parse_plan_text_to_todos(plan_text)
     cursor_payload: dict | None = None
     if emit_cursor:
+        repo_root = resolve_project_root(Path.cwd(), md_path)
         cursor_prompt = build_cursor_agent_prompt(
             todos,
             repo_snapshot_hint="python project with pyproject.toml, src/agent_todo_impl, tests/",
         )
         cmd = build_cursor_agent_command(
-            CursorAgentConfig(workspace=Path.cwd(), model=cursor_model or "auto"),
+            CursorAgentConfig(workspace=repo_root, model=cursor_model or "auto"),
             prompt=cursor_prompt,
         )
         cursor_payload = {
@@ -73,9 +75,10 @@ def run(
     cursor_force: bool = typer.Option(True, help="cursor-agent 允许强制执行（--force）"),
 ):
     """完整闭环：plan -> implement -> review(<=3) -> 自动提交（独立分支）。"""
+    repo_root = resolve_project_root(Path.cwd(), md_path)
     orchestrator = Orchestrator(
         OrchestratorConfig(
-            repo_root=Path.cwd(),
+            repo_root=repo_root,
             md_path=md_path,
             model=model,
             executor=executor,

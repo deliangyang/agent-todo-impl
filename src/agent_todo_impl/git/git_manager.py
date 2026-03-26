@@ -27,9 +27,8 @@ class GitManager:
         return (self.repo_root / ".git").exists()
 
     def ensure_repo(self) -> None:
-        if self.is_repo():
-            return
-        self._run(["git", "init", "-b", "main"])
+        if not self.is_repo():
+            raise RuntimeError(f"not a git repo: {self.repo_root}")
 
     def current_branch(self) -> str:
         return self._run(["git", "rev-parse", "--abbrev-ref", "HEAD"])

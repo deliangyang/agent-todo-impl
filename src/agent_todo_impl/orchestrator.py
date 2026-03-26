@@ -65,8 +65,11 @@ class Orchestrator:
         return "python project with pyproject.toml, src/agent_todo_impl, tests/"
 
     def run(self) -> OrchestratorResult:
-        self._git.ensure_repo()
-        branch = self._git.create_run_branch("agent-todo-run")
+        has_git = self._git.is_repo()
+        branch = "(no-git)"
+        if has_git:
+            self._git.ensure_repo()
+            branch = self._git.create_run_branch("agent-todo-run")
 
         docs = collect_markdown_context(self._config.md_path)
         plan_prompt = build_plan_prompt(docs)
@@ -90,12 +93,13 @@ class Orchestrator:
         else:
             self._executor.execute(todos, repo_snapshot_hint=self._snapshot_hint())
         gates = run_quality_gates(self._config.repo_root)
-        self._git.add_all()
-        self._git.commit("implement todos")
+        if has_git:
+            self._git.add_all()
+            self._git.commit("implement todos")
 
         rounds = 0
         review_dump: dict = {"findings": []}
-        while rounds < self._config.max_review_rounds:
+        while has_git and rounds < self._config.max_review_rounds:
             rounds += 1
             diff = self._git.diff()
             review = self._reviewer.review(diff=diff, gates_output=gates.output)
