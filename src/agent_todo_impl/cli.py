@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -75,6 +76,11 @@ def run(
     cursor_force: bool = typer.Option(True, help="cursor-agent 允许强制执行（--force）"),
 ):
     """完整闭环：plan -> implement -> review(<=3) -> 自动提交（独立分支）。"""
+    if executor == "cursor":
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(levelname)s %(name)s: %(message)s",
+        )
     repo_root = resolve_project_root(Path.cwd(), md_path)
     orchestrator = Orchestrator(
         OrchestratorConfig(

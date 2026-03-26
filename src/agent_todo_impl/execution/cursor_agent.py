@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 import subprocess
@@ -7,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agent_todo_impl.planning.plan_parser import TodoItem
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -83,9 +86,28 @@ def cursor_agent_command_string(cmd: list[str]) -> str:
     return " ".join(shlex.quote(x) for x in cmd)
 
 
+def _cursor_agent_command_for_log(cmd: list[str]) -> str:
+    parts: list[str] = []
+    i = 0
+    while i < len(cmd):
+        if cmd[i] == "--api-key" and i + 1 < len(cmd):
+            parts.extend(["--api-key", "***REDACTED***"])
+            i += 2
+        else:
+            parts.append(cmd[i])
+            i += 1
+    return cursor_agent_command_string(parts)
+
+
 def run_cursor_agent(cfg: CursorAgentConfig, *, prompt: str) -> CursorAgentRunResult:
     cmd = build_cursor_agent_command(cfg, prompt=prompt)
-    p = subprocess.run(cmd, text=True, capture_output=True)
+    cwd = Path.cwd()
+    logger.info(
+        "cursor-agent 执行目录: %s 命令: %s",
+        cwd,
+        _cursor_agent_command_for_log(cmd),
+    )
+    p = subprocess.run(cmd, text=True, capture_output=True, cwd=cwd)
     return CursorAgentRunResult(
         command=cmd,
         prompt=prompt,
