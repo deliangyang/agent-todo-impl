@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class CursorAgentConfig:
     workspace: Path
+    run_cwd: Path | None = None
     model: str = "auto"
     api_key: str | None = None
     trust: bool = True
@@ -48,7 +49,6 @@ def build_cursor_agent_prompt(todos: list[TodoItem], *, repo_snapshot_hint: str)
     return (
         "你是 Cursor CLI agent（具备读写代码和运行命令能力）。\n"
         "请在当前 workspace 内完成以下 TODO，实现后确保质量门禁通过"
-        "（ruff format/check + pytest）。\n"
         "约束：只修改仓库内文件；不要做 git push/force；不要引入无关依赖。\n\n"
         f"仓库提示：{repo_snapshot_hint}\n\n"
         "TODO：\n"
@@ -117,7 +117,7 @@ def _cursor_agent_command_for_log(cmd: list[str]) -> str:
 
 def run_cursor_agent(cfg: CursorAgentConfig, *, prompt: str) -> CursorAgentRunResult:
     cmd = build_cursor_agent_command(cfg, prompt=prompt)
-    cwd = Path.cwd()
+    cwd = (cfg.run_cwd or Path.cwd()).resolve()
     logger.info(
         "cursor-agent 执行目录: %s 命令: %s",
         cwd,

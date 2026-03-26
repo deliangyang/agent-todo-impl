@@ -24,8 +24,7 @@ def build_execution_prompt(todos: list[TodoItem], *, repo_snapshot_hint: str) ->
         "  ]\n"
         "}\n\n"
         "约束：\n"
-        "- 不要删除大量文件；优先小改动。\n"
-        "- 让代码可运行、语法正确，尽量让 pytest 通过。\n\n"
+        "- 不要删除大量文件；优先小改动。\n\n"
         f"仓库提示：{repo_snapshot_hint}\n\n"
         "TODO：\n" + "\n".join([f"- {t.id}: {t.content}" for t in todos]) + "\n"
     )

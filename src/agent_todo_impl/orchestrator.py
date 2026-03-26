@@ -81,6 +81,10 @@ class Orchestrator:
         dirs_part = ",".join(top_dirs) if top_dirs else "none"
         return f"cwd={cwd}; markers={marker_part}; top_dirs={dirs_part}"
 
+    def _todo_run_cwd(self) -> Path:
+        target = self._config.md_path.resolve()
+        return target if target.is_dir() else target.parent
+
     def run(self) -> OrchestratorResult:
         has_git = self._git.is_repo()
         branch = "(no-git)"
@@ -99,6 +103,7 @@ class Orchestrator:
             run = run_cursor_agent(
                 CursorAgentConfig(
                     workspace=self._config.repo_root,
+                    run_cwd=self._todo_run_cwd(),
                     model=self._config.cursor_model,
                     force=self._config.cursor_force,
                 ),
@@ -136,6 +141,7 @@ class Orchestrator:
                 run = run_cursor_agent(
                     CursorAgentConfig(
                         workspace=self._config.repo_root,
+                        run_cwd=self._todo_run_cwd(),
                         model=self._config.cursor_model,
                         force=self._config.cursor_force,
                     ),
