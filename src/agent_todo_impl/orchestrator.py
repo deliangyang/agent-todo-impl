@@ -62,7 +62,24 @@ class Orchestrator:
         self._reviewer = Reviewer(llm=self._llm)
 
     def _snapshot_hint(self) -> str:
-        return "python project with pyproject.toml, src/agent_todo_impl, tests/"
+        cwd = Path.cwd().resolve()
+        markers = [
+            "composer.json",
+            "pyproject.toml",
+            "package.json",
+            "go.mod",
+            "Cargo.toml",
+            "pom.xml",
+        ]
+        found_markers = [m for m in markers if (cwd / m).exists()]
+        top_dirs = [
+            p.name
+            for p in sorted(cwd.iterdir(), key=lambda x: x.name)
+            if p.is_dir() and not p.name.startswith(".")
+        ][:8]
+        marker_part = ",".join(found_markers) if found_markers else "none"
+        dirs_part = ",".join(top_dirs) if top_dirs else "none"
+        return f"cwd={cwd}; markers={marker_part}; top_dirs={dirs_part}"
 
     def run(self) -> OrchestratorResult:
         has_git = self._git.is_repo()
