@@ -4,6 +4,8 @@ import logging
 import os
 import shlex
 import subprocess
+import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,6 +88,20 @@ def cursor_agent_command_string(cmd: list[str]) -> str:
     return " ".join(shlex.quote(x) for x in cmd)
 
 
+def _stream_pipe_to_terminal(pipe, tee, parts: list[str]) -> None:
+    """Read subprocess pipe in chunks; echo to tee and append to parts (for model_dump)."""
+    try:
+        while True:
+            chunk = pipe.read(4096)
+            if not chunk:
+                break
+            parts.append(chunk)
+            tee.write(chunk)
+            tee.flush()
+    finally:
+        pipe.close()
+
+
 def _cursor_agent_command_for_log(cmd: list[str]) -> str:
     parts: list[str] = []
     i = 0
@@ -107,11 +123,32 @@ def run_cursor_agent(cfg: CursorAgentConfig, *, prompt: str) -> CursorAgentRunRe
         cwd,
         _cursor_agent_command_for_log(cmd),
     )
-    p = subprocess.run(cmd, text=True, capture_output=True, cwd=cwd)
+    out_parts: list[str] = []
+    err_parts: list[str] = []
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    t_out = threading.Thread(
+        target=_stream_pipe_to_terminal,
+        args=(proc.stdout, sys.stdout, out_parts),
+    )
+    t_err = threading.Thread(
+        target=_stream_pipe_to_terminal,
+        args=(proc.stderr, sys.stderr, err_parts),
+    )
+    t_out.start()
+    t_err.start()
+    exit_code = proc.wait()
+    t_out.join()
+    t_err.join()
     return CursorAgentRunResult(
         command=cmd,
         prompt=prompt,
-        exit_code=p.returncode,
-        stdout=(p.stdout or "").strip(),
-        stderr=(p.stderr or "").strip(),
+        exit_code=exit_code,
+        stdout="".join(out_parts).strip(),
+        stderr="".join(err_parts).strip(),
     )
