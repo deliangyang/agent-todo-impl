@@ -43,7 +43,7 @@ agent-todo plan --md-path docs/ --emit-cursor
 agent-todo run --md-path docs/ --executor cursor
 ```
 
-`--executor cursor` 时：每条 TODO（以及每条 review 修复项）各调用一次 `cursor-agent`，使用 `--output-format json` 从响应读取 `session_id`，后续调用带 `--resume <session_id>` 沿用同一会话；每完成一条对应一次 `git commit`。
+`--executor cursor` 时：每条 TODO（以及每条 review 修复项）各调用一次 `cursor-agent`，使用 `--output-format json` 从响应读取 `session_id`，后续调用带 `--resume <session_id>` 沿用同一会话；若该条执行后工作区相对 HEAD **有文件变更** 则 `git commit`，否则跳过提交并继续下一条。
 
  ### 约束
  - 不做 `git merge`。

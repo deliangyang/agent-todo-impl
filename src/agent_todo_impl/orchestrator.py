@@ -142,7 +142,7 @@ class Orchestrator:
                             "need --output-format json and a successful run"
                         )
                     session_id = run.session_id
-                if has_git:
+                if has_git and self._git.has_worktree_changes():
                     self._git.add_all()
                     self._git.commit(f"implement todo {todo.id}")
         else:
@@ -184,8 +184,9 @@ class Orchestrator:
                             )
                         session_id = run.session_id
                     gates = run_quality_gates(self._config.repo_root)
-                    self._git.add_all()
-                    self._git.commit(f"review fix r{rounds} {fix_todo.id}")
+                    if self._git.has_worktree_changes():
+                        self._git.add_all()
+                        self._git.commit(f"review fix r{rounds} {fix_todo.id}")
             else:
                 self._executor.execute(fix_todos, repo_snapshot_hint=self._snapshot_hint())
                 gates = run_quality_gates(self._config.repo_root)

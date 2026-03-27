@@ -23,3 +23,6 @@ def test_git_manager_branch_and_commit(tmp_path: Path):
     gm.add_all()
     gm.commit("add b")
     assert gm.status_porcelain() == ""
+    assert not gm.has_worktree_changes()
+    (repo / "c.txt").write_text("c", encoding="utf-8")
+    assert gm.has_worktree_changes()

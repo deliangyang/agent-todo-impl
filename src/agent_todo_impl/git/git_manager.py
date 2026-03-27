@@ -52,3 +52,7 @@ class GitManager:
 
     def status_porcelain(self) -> str:
         return self._run(["git", "status", "--porcelain"])
+
+    def has_worktree_changes(self) -> bool:
+        """True if there are staged/unstaged/untracked changes vs HEAD."""
+        return bool(self.status_porcelain())
