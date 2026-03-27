@@ -2,8 +2,37 @@ from agent_todo_impl.execution.cursor_agent import (
     CursorAgentConfig,
     build_cursor_agent_command,
     build_cursor_agent_prompt,
+    build_cursor_agent_prompt_for_todo,
+    parse_cursor_agent_json_stdout,
 )
 from agent_todo_impl.planning.plan_parser import TodoItem
+
+
+def test_build_cursor_agent_prompt_for_todo_single_item():
+    t = TodoItem(id="a-b", content="只做这一件")
+    prompt = build_cursor_agent_prompt_for_todo(t, repo_snapshot_hint="hint")
+    assert "hint" in prompt
+    assert "仅完成这一条" in prompt
+    assert "- a-b: 只做这一件" in prompt
+
+
+def test_parse_cursor_agent_json_stdout():
+    raw = '{"type":"result","session_id":"sid-uuid","result":"done"}'
+    sid, res = parse_cursor_agent_json_stdout(raw)
+    assert sid == "sid-uuid"
+    assert res == "done"
+
+
+def test_build_cursor_agent_command_includes_resume(tmp_path):
+    cfg = CursorAgentConfig(
+        workspace=tmp_path,
+        resume_session_id="abc-session",
+        output_format="json",
+    )
+    cmd = build_cursor_agent_command(cfg, prompt="next")
+    assert "--resume" in cmd
+    idx = cmd.index("--resume")
+    assert cmd[idx + 1] == "abc-session"
 
 
 def test_build_cursor_agent_prompt_contains_todos():

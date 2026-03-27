@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shlex
@@ -28,6 +29,8 @@ class CursorAgentConfig:
     api_key: str | None = None
     trust: bool = True
     force: bool = True
+    # Continue the same chat as a previous successful JSON response (--resume <id>).
+    resume_session_id: str | None = None
     # cursor-agent supports: text | json | stream-json
     # We default to text to match cursor-agent CLI output (thinking/generate).
     output_format: str = "text"
@@ -41,6 +44,8 @@ class CursorAgentRunResult:
     exit_code: int
     stdout: str
     stderr: str
+    # From --output-format json terminal object when present
+    session_id: str | None = None
 
     def model_dump(self) -> dict:
         return {
@@ -49,7 +54,36 @@ class CursorAgentRunResult:
             "exit_code": self.exit_code,
             "stdout": self.stdout,
             "stderr": self.stderr,
+            "session_id": self.session_id,
         }
+
+
+def parse_cursor_agent_json_stdout(stdout: str) -> tuple[str | None, str]:
+    """Parse cursor-agent `--output-format json` line. Returns (session_id, result text)."""
+    raw = stdout.strip()
+    if not raw:
+        return None, ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None, raw
+    if not isinstance(data, dict):
+        return None, raw
+    sid = data.get("session_id")
+    result = data.get("result")
+    sid_str = sid if isinstance(sid, str) else None
+    res_str = result if isinstance(result, str) else ""
+    return sid_str, res_str
+
+
+def build_cursor_agent_prompt_for_todo(todo: TodoItem, *, repo_snapshot_hint: str) -> str:
+    return (
+        "你是 Cursor CLI agent（具备读写代码和运行命令能力）。\n"
+        "请在当前 workspace 内只完成下面这一条 TODO，实现后确保质量门禁可通过。\n"
+        "约束：只修改仓库内文件；不要做 git push/force；不要引入无关依赖。\n\n"
+        f"仓库提示：{repo_snapshot_hint}\n\n"
+        f"TODO（仅完成这一条）：\n- {todo.id}: {todo.content}\n"
+    )
 
 
 def build_cursor_agent_prompt(todos: list[TodoItem], *, repo_snapshot_hint: str) -> str:
@@ -87,6 +121,8 @@ def build_cursor_agent_command(cfg: CursorAgentConfig, *, prompt: str) -> list[s
     api_key = cfg.api_key or os.getenv("CURSOR_API_KEY")
     if api_key:
         cmd += ["--api-key", api_key]
+    if cfg.resume_session_id:
+        cmd += ["--resume", cfg.resume_session_id]
 
     cmd.append(prompt)
     return cmd
@@ -116,6 +152,9 @@ def _cursor_agent_command_for_log(cmd: list[str]) -> str:
     while i < len(cmd):
         if cmd[i] == "--api-key" and i + 1 < len(cmd):
             parts.extend(["--api-key", "***REDACTED***"])
+            i += 2
+        elif cmd[i] == "--resume" and i + 1 < len(cmd):
+            parts.extend(["--resume", "***SESSION***"])
             i += 2
         else:
             parts.append(cmd[i])
@@ -153,10 +192,16 @@ def run_cursor_agent(cfg: CursorAgentConfig, *, prompt: str) -> CursorAgentRunRe
     exit_code = proc.wait()
     t_out.join()
     t_err.join()
+    stdout_full = "".join(out_parts).strip()
+    stderr_full = "".join(err_parts).strip()
+    session_id: str | None = None
+    if cfg.output_format == "json" and exit_code == 0:
+        session_id, _ = parse_cursor_agent_json_stdout(stdout_full)
     return CursorAgentRunResult(
         command=cmd,
         prompt=prompt,
         exit_code=exit_code,
-        stdout="".join(out_parts).strip(),
-        stderr="".join(err_parts).strip(),
+        stdout=stdout_full,
+        stderr=stderr_full,
+        session_id=session_id,
     )

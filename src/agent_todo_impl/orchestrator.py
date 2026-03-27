@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from agent_todo_impl.execution.cursor_agent import (
     CursorAgentConfig,
-    build_cursor_agent_prompt,
+    build_cursor_agent_prompt_for_todo,
     run_cursor_agent,
     todo_run_cwd_for_md_path,
 )
@@ -116,28 +116,41 @@ class Orchestrator:
         todos = parse_plan_text_to_todos(plan_text)
 
         cursor_runs: list[dict] = []
+        session_id: str | None = None
+        cursor_base = CursorAgentConfig(
+            workspace=self._config.repo_root,
+            run_cwd=self._todo_run_cwd(),
+            model=self._config.cursor_model,
+            force=self._config.cursor_force,
+            output_format="json",
+            stream_partial_output=False,
+        )
         if self._config.executor == "cursor":
-            prompt = build_cursor_agent_prompt(todos, repo_snapshot_hint=self._snapshot_hint())
-            run = run_cursor_agent(
-                CursorAgentConfig(
-                    workspace=self._config.repo_root,
-                    run_cwd=self._todo_run_cwd(),
-                    model=self._config.cursor_model,
-                    force=self._config.cursor_force,
-                    output_format=self._config.cursor_output_format,
-                    stream_partial_output=self._config.cursor_stream_partial_output,
-                ),
-                prompt=prompt,
-            )
-            cursor_runs.append(run.model_dump())
-            if run.exit_code != 0:
-                raise RuntimeError(f"cursor-agent failed (exit={run.exit_code})")
+            for todo in todos:
+                prompt = build_cursor_agent_prompt_for_todo(
+                    todo, repo_snapshot_hint=self._snapshot_hint()
+                )
+                cfg = replace(cursor_base, resume_session_id=session_id)
+                run = run_cursor_agent(cfg, prompt=prompt)
+                cursor_runs.append(run.model_dump())
+                if run.exit_code != 0:
+                    raise RuntimeError(f"cursor-agent failed (exit={run.exit_code})")
+                if session_id is None:
+                    if not run.session_id:
+                        raise RuntimeError(
+                            "cursor-agent JSON missing session_id on first todo; "
+                            "need --output-format json and a successful run"
+                        )
+                    session_id = run.session_id
+                if has_git:
+                    self._git.add_all()
+                    self._git.commit(f"implement todo {todo.id}")
         else:
             self._executor.execute(todos, repo_snapshot_hint=self._snapshot_hint())
+            if has_git:
+                self._git.add_all()
+                self._git.commit("implement todos")
         gates = run_quality_gates(self._config.repo_root)
-        if has_git:
-            self._git.add_all()
-            self._git.commit("implement todos")
 
         rounds = 0
         review_dump: dict = {"findings": []}
@@ -155,28 +168,29 @@ class Orchestrator:
                 for i, f in enumerate(review.findings)
             ]
             if self._config.executor == "cursor":
-                prompt = build_cursor_agent_prompt(
-                    fix_todos, repo_snapshot_hint=self._snapshot_hint()
-                )
-                run = run_cursor_agent(
-                    CursorAgentConfig(
-                        workspace=self._config.repo_root,
-                        run_cwd=self._todo_run_cwd(),
-                        model=self._config.cursor_model,
-                        force=self._config.cursor_force,
-                        output_format=self._config.cursor_output_format,
-                        stream_partial_output=self._config.cursor_stream_partial_output,
-                    ),
-                    prompt=prompt,
-                )
-                cursor_runs.append(run.model_dump())
-                if run.exit_code != 0:
-                    raise RuntimeError(f"cursor-agent failed (exit={run.exit_code})")
+                for fix_todo in fix_todos:
+                    prompt = build_cursor_agent_prompt_for_todo(
+                        fix_todo, repo_snapshot_hint=self._snapshot_hint()
+                    )
+                    cfg = replace(cursor_base, resume_session_id=session_id)
+                    run = run_cursor_agent(cfg, prompt=prompt)
+                    cursor_runs.append(run.model_dump())
+                    if run.exit_code != 0:
+                        raise RuntimeError(f"cursor-agent failed (exit={run.exit_code})")
+                    if session_id is None:
+                        if not run.session_id:
+                            raise RuntimeError(
+                                "cursor-agent JSON missing session_id on first review fix"
+                            )
+                        session_id = run.session_id
+                    gates = run_quality_gates(self._config.repo_root)
+                    self._git.add_all()
+                    self._git.commit(f"review fix r{rounds} {fix_todo.id}")
             else:
                 self._executor.execute(fix_todos, repo_snapshot_hint=self._snapshot_hint())
-            gates = run_quality_gates(self._config.repo_root)
-            self._git.add_all()
-            self._git.commit(f"review fix round {rounds}")
+                gates = run_quality_gates(self._config.repo_root)
+                self._git.add_all()
+                self._git.commit(f"review fix round {rounds}")
 
         return OrchestratorResult(
             branch=branch,

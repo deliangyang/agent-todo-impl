@@ -85,12 +85,12 @@ def run(
     cursor_model: Optional[str] = typer.Option(None, help="cursor-agent 使用的 model（默认 auto）"),
     cursor_force: bool = typer.Option(True, help="cursor-agent 允许强制执行（--force）"),
     cursor_output_format: str = typer.Option(
-        "text",
-        help="cursor-agent 输出格式：text | json | stream-json（默认 text）",
+        "json",
+        help="保留项；--executor cursor 时实现与 review 固定为 json（解析 session_id 并 --resume）",
     ),
     cursor_stream_partial_output: bool = typer.Option(
         False,
-        help="cursor-agent: stream-json 时是否开启 --stream-partial-output",
+        help="保留项；当前 executor=cursor 实现未使用 stream-json",
     ),
 ):
     """完整闭环：plan -> implement -> review(<=3) -> 自动提交（独立分支）。"""
