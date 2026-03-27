@@ -22,8 +22,10 @@ class CursorAgentConfig:
     api_key: str | None = None
     trust: bool = True
     force: bool = True
-    output_format: str = "stream-json"
-    stream_partial_output: bool = True
+    # cursor-agent supports: text | json | stream-json
+    # We default to text to match cursor-agent CLI output (thinking/generate).
+    output_format: str = "text"
+    stream_partial_output: bool = False
 
 
 @dataclass(frozen=True)
@@ -64,7 +66,7 @@ def build_cursor_agent_command(cfg: CursorAgentConfig, *, prompt: str) -> list[s
         "--output-format",
         cfg.output_format,
     ]
-    if cfg.stream_partial_output:
+    if cfg.output_format == "stream-json" and cfg.stream_partial_output:
         cmd.append("--stream-partial-output")
     cmd += [
         "--workspace",

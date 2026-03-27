@@ -26,5 +26,5 @@ def test_build_cursor_agent_command_includes_required_flags(tmp_path):
     assert "--model" in cmd
     assert "auto" in cmd
     assert "--output-format" in cmd
-    assert "stream-json" in cmd
-    assert "--stream-partial-output" in cmd
+    assert "text" in cmd
+    assert "--stream-partial-output" not in cmd

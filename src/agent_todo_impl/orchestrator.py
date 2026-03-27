@@ -27,6 +27,8 @@ class OrchestratorConfig:
     executor: str = "internal"  # internal | cursor
     cursor_model: str = "auto"
     cursor_force: bool = True
+    cursor_output_format: str = "text"  # text | json | stream-json
+    cursor_stream_partial_output: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,8 @@ class Orchestrator:
                     run_cwd=self._todo_run_cwd(),
                     model=self._config.cursor_model,
                     force=self._config.cursor_force,
+                    output_format=self._config.cursor_output_format,
+                    stream_partial_output=self._config.cursor_stream_partial_output,
                 ),
                 prompt=prompt,
             )
@@ -144,6 +148,8 @@ class Orchestrator:
                         run_cwd=self._todo_run_cwd(),
                         model=self._config.cursor_model,
                         force=self._config.cursor_force,
+                        output_format=self._config.cursor_output_format,
+                        stream_partial_output=self._config.cursor_stream_partial_output,
                     ),
                     prompt=prompt,
                 )
