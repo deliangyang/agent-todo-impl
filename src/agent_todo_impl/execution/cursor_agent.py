@@ -14,6 +14,12 @@ from agent_todo_impl.planning.plan_parser import TodoItem
 logger = logging.getLogger(__name__)
 
 
+def todo_run_cwd_for_md_path(md_path: Path) -> Path:
+    """Working directory for cursor-agent when the task is tied to a doc path (file or dir)."""
+    target = md_path.resolve()
+    return target if target.is_dir() else target.parent
+
+
 @dataclass(frozen=True)
 class CursorAgentConfig:
     workspace: Path

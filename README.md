@@ -12,8 +12,10 @@
  
  ### 环境变量
  
- - `OPENAI_API_KEY`: 必填
- - `AGENT_TODO_MODEL`: 可选，默认 `gpt-4.1-mini`
+ - `cursor-agent`：需在 PATH 中（`plan` 与 `run` 中的 plan 步骤均通过其生成 `/plan`）
+ - `CURSOR_API_KEY`：可选，传给 `cursor-agent --api-key`（亦可由 cursor-agent 自行从环境读取）
+ - `OPENAI_API_KEY`：`agent-todo run` 在 **internal 执行器** 或 **code review** 时必填（与 OpenAI API 通信）
+ - `AGENT_TODO_MODEL`：可选，默认 `gpt-4.1-mini`（仅影响上述 OpenAI 调用，不影响 plan）
  
  ### 使用
  

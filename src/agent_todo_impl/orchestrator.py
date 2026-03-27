@@ -7,6 +7,7 @@ from agent_todo_impl.execution.cursor_agent import (
     CursorAgentConfig,
     build_cursor_agent_prompt,
     run_cursor_agent,
+    todo_run_cwd_for_md_path,
 )
 from agent_todo_impl.execution.executor import Executor, ExecutorConfig
 from agent_todo_impl.git.git_manager import GitManager
@@ -84,8 +85,7 @@ class Orchestrator:
         return f"cwd={cwd}; markers={marker_part}; top_dirs={dirs_part}"
 
     def _todo_run_cwd(self) -> Path:
-        target = self._config.md_path.resolve()
-        return target if target.is_dir() else target.parent
+        return todo_run_cwd_for_md_path(self._config.md_path)
 
     def run(self) -> OrchestratorResult:
         has_git = self._git.is_repo()
@@ -96,7 +96,23 @@ class Orchestrator:
 
         docs = collect_markdown_context(self._config.md_path)
         plan_prompt = build_plan_prompt(docs)
-        plan_text = self._llm.complete_text(plan_prompt)
+        plan_run = run_cursor_agent(
+            CursorAgentConfig(
+                workspace=self._config.repo_root,
+                run_cwd=self._todo_run_cwd(),
+                model=self._config.cursor_model,
+                force=self._config.cursor_force,
+                output_format="text",
+                stream_partial_output=False,
+            ),
+            prompt=plan_prompt,
+        )
+        if plan_run.exit_code != 0:
+            raise RuntimeError(
+                f"cursor-agent plan generation failed (exit={plan_run.exit_code}): "
+                f"{plan_run.stderr or plan_run.stdout}"
+            )
+        plan_text = plan_run.stdout
         todos = parse_plan_text_to_todos(plan_text)
 
         cursor_runs: list[dict] = []

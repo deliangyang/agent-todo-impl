@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import pytest
 from agent_todo_impl.project_scan import resolve_project_root
 
 
