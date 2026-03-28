@@ -1,6 +1,6 @@
  ## agent-todo-impl
  
- 一个用 Python 实现的“任务编排 agent”CLI：读取 `*.md` → 让 AI 生成 `/plan` todo → 自动实现并跑质量门禁 → code review agent 最多 3 轮修正 → 每次 run 都在独立分支自动提交（仅本地）。
+ 一个用 Python 实现的“任务编排 agent”CLI：读取需求（`*.md`、目录、内联文字、本地图片、图片 URL，可组合）→ 让 AI 生成 `/plan` todo → 自动实现并跑质量门禁 → code review agent 最多 3 轮修正 → 每次 run 都在独立分支自动提交（仅本地）。
  
  ### 安装
  
@@ -19,10 +19,12 @@
  
  ### 使用
  
- - 生成 plan（仅输出到 stdout，不改代码）
+ - 生成 plan（仅输出到 stdout，不改代码）。`--md-path` 可为目录、单个 `.md`、本地图片文件或其它文本文件；可与 `--text` / `--image` / `--image-url` 组合（拼接顺序：md 路径 → 各段 text → 各张本地图 → 各 URL）。
  
  ```bash
  agent-todo plan --md-path docs/
+ agent-todo plan --text "实现一个登录接口"
+ agent-todo plan --md-path prd.md --text "补充：需要单测" --image ./ui.png --image-url https://cdn.example.com/ref.png
  ```
  
 - 生成 plan，并输出可交付给 Cursor CLI agent 的执行载荷（prompt/command）
@@ -35,6 +37,7 @@ agent-todo plan --md-path docs/ --emit-cursor
  
  ```bash
  agent-todo run --md-path docs/
+ agent-todo run --text "仅一句话需求" --executor cursor
  ```
  
 - 用 Cursor CLI agent 执行 todo（实现交给 `cursor-agent`，其余闭环不变）

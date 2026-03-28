@@ -12,7 +12,7 @@ from agent_todo_impl.execution.cursor_agent import (
 from agent_todo_impl.execution.executor import Executor, ExecutorConfig
 from agent_todo_impl.git.git_manager import GitManager
 from agent_todo_impl.llm.openai_client import OpenAIClient, OpenAIClientConfig
-from agent_todo_impl.mdscan import collect_markdown_context
+from agent_todo_impl.mdscan import collect_requirement_context
 from agent_todo_impl.planning.plan_generator import build_plan_prompt
 from agent_todo_impl.planning.plan_parser import TodoItem, parse_plan_text_to_todos
 from agent_todo_impl.quality.gates import run_quality_gates
@@ -22,14 +22,18 @@ from agent_todo_impl.review.reviewer import Reviewer
 @dataclass(frozen=True)
 class OrchestratorConfig:
     repo_root: Path
-    md_path: Path
+    md_path: Path | None
     model: str
+    enable_review: bool = False
     max_review_rounds: int = 3
     executor: str = "internal"  # internal | cursor
     cursor_model: str = "auto"
     cursor_force: bool = True
     cursor_output_format: str = "text"  # text | json | stream-json
     cursor_stream_partial_output: bool = False
+    text_snippets: tuple[str, ...] = ()
+    image_paths: tuple[Path, ...] = ()
+    image_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,7 +89,9 @@ class Orchestrator:
         return f"cwd={cwd}; markers={marker_part}; top_dirs={dirs_part}"
 
     def _todo_run_cwd(self) -> Path:
-        return todo_run_cwd_for_md_path(self._config.md_path)
+        if self._config.md_path is not None:
+            return todo_run_cwd_for_md_path(self._config.md_path)
+        return Path.cwd().resolve()
 
     def run(self) -> OrchestratorResult:
         has_git = self._git.is_repo()
@@ -94,7 +100,12 @@ class Orchestrator:
             self._git.ensure_repo()
             branch = self._git.create_run_branch("agent-todo-run")
 
-        docs = collect_markdown_context(self._config.md_path)
+        docs = collect_requirement_context(
+            md_path=self._config.md_path,
+            text_snippets=list(self._config.text_snippets),
+            image_paths=list(self._config.image_paths),
+            image_urls=list(self._config.image_urls),
+        )
         plan_prompt = build_plan_prompt(docs)
         plan_run = run_cursor_agent(
             CursorAgentConfig(
@@ -154,44 +165,45 @@ class Orchestrator:
 
         rounds = 0
         review_dump: dict = {"findings": []}
-        while has_git and rounds < self._config.max_review_rounds:
-            rounds += 1
-            diff = self._git.diff()
-            review = self._reviewer.review(diff=diff, gates_output=gates.output)
-            review_dump = review.model_dump()
-            must_fix = [f for f in review.findings if f.level == "must_fix"]
-            if gates.ok and not must_fix:
-                break
+        if self._config.enable_review:
+            while has_git and rounds < self._config.max_review_rounds:
+                rounds += 1
+                diff = self._git.diff()
+                review = self._reviewer.review(diff=diff, gates_output=gates.output)
+                review_dump = review.model_dump()
+                must_fix = [f for f in review.findings if f.level == "must_fix"]
+                if gates.ok and not must_fix:
+                    break
 
-            fix_todos = [
-                TodoItem(id=f"review-{i+1}", content=f"{f.level}: {f.message}")
-                for i, f in enumerate(review.findings)
-            ]
-            if self._config.executor == "cursor":
-                for fix_todo in fix_todos:
-                    prompt = build_cursor_agent_prompt_for_todo(
-                        fix_todo, repo_snapshot_hint=self._snapshot_hint()
-                    )
-                    cfg = replace(cursor_base, resume_session_id=session_id)
-                    run = run_cursor_agent(cfg, prompt=prompt)
-                    cursor_runs.append(run.model_dump())
-                    if run.exit_code != 0:
-                        raise RuntimeError(f"cursor-agent failed (exit={run.exit_code})")
-                    if session_id is None:
-                        if not run.session_id:
-                            raise RuntimeError(
-                                "cursor-agent JSON missing session_id on first review fix"
-                            )
-                        session_id = run.session_id
+                fix_todos = [
+                    TodoItem(id=f"review-{i+1}", content=f"{f.level}: {f.message}")
+                    for i, f in enumerate(review.findings)
+                ]
+                if self._config.executor == "cursor":
+                    for fix_todo in fix_todos:
+                        prompt = build_cursor_agent_prompt_for_todo(
+                            fix_todo, repo_snapshot_hint=self._snapshot_hint()
+                        )
+                        cfg = replace(cursor_base, resume_session_id=session_id)
+                        run = run_cursor_agent(cfg, prompt=prompt)
+                        cursor_runs.append(run.model_dump())
+                        if run.exit_code != 0:
+                            raise RuntimeError(f"cursor-agent failed (exit={run.exit_code})")
+                        if session_id is None:
+                            if not run.session_id:
+                                raise RuntimeError(
+                                    "cursor-agent JSON missing session_id on first review fix"
+                                )
+                            session_id = run.session_id
+                        gates = run_quality_gates(self._config.repo_root)
+                        if self._git.has_worktree_changes():
+                            self._git.add_all()
+                            self._git.commit(f"review fix r{rounds} {fix_todo.id}")
+                else:
+                    self._executor.execute(fix_todos, repo_snapshot_hint=self._snapshot_hint())
                     gates = run_quality_gates(self._config.repo_root)
-                    if self._git.has_worktree_changes():
-                        self._git.add_all()
-                        self._git.commit(f"review fix r{rounds} {fix_todo.id}")
-            else:
-                self._executor.execute(fix_todos, repo_snapshot_hint=self._snapshot_hint())
-                gates = run_quality_gates(self._config.repo_root)
-                self._git.add_all()
-                self._git.commit(f"review fix round {rounds}")
+                    self._git.add_all()
+                    self._git.commit(f"review fix round {rounds}")
 
         return OrchestratorResult(
             branch=branch,
