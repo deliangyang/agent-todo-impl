@@ -3,6 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from agent_todo_impl.checkpoint import (
+    RunCheckpoint,
+    clear_active_checkpoint,
+    in_progress_checkpoint_path,
+    read_checkpoint,
+    register_active_checkpoint,
+    session_checkpoint_path,
+    write_checkpoint,
+)
 from agent_todo_impl.execution.cursor_agent import (
     CursorAgentConfig,
     build_cursor_agent_prompt_for_todo,
@@ -34,6 +43,8 @@ class OrchestratorConfig:
     text_snippets: tuple[str, ...] = ()
     image_paths: tuple[Path, ...] = ()
     image_urls: tuple[str, ...] = ()
+    # cursor executor: persist under ~/.agent-todo/checkpoint/; resume with same Cursor session_id
+    resume_session_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,58 +104,175 @@ class Orchestrator:
             return todo_run_cwd_for_md_path(self._config.md_path)
         return Path.cwd().resolve()
 
+    def _use_cursor_state(self) -> bool:
+        return self._config.executor == "cursor"
+
+    def _persist_checkpoint(self, ckpt: RunCheckpoint) -> None:
+        if not self._use_cursor_state():
+            return
+        root = self._config.repo_root.resolve()
+        if ckpt.session_id:
+            path = session_checkpoint_path(root, ckpt.session_id)
+            in_progress_checkpoint_path(root).unlink(missing_ok=True)
+        else:
+            path = in_progress_checkpoint_path(root)
+        write_checkpoint(path, ckpt)
+        register_active_checkpoint(path, ckpt.to_json_dict())
+
+    def _validate_checkpoint(self, ckpt: RunCheckpoint) -> None:
+        cfg = self._config
+        if str(cfg.repo_root.resolve()) != ckpt.repo_root:
+            raise RuntimeError(
+                "checkpoint repo_root mismatch; use the same project root as the original run"
+            )
+        md = str(cfg.md_path.resolve()) if cfg.md_path else None
+        if md != ckpt.md_path:
+            raise RuntimeError(
+                "checkpoint md_path mismatch; pass the same --md-path as the original run"
+            )
+        if list(cfg.text_snippets) != list(ckpt.text_snippets):
+            raise RuntimeError("checkpoint text_snippets mismatch")
+        if [str(p.resolve()) for p in cfg.image_paths] != list(ckpt.image_paths):
+            raise RuntimeError("checkpoint image_paths mismatch")
+        if list(cfg.image_urls) != list(ckpt.image_urls):
+            raise RuntimeError("checkpoint image_urls mismatch")
+        if bool(ckpt.enable_review) != bool(cfg.enable_review):
+            raise RuntimeError(
+                "checkpoint enable_review mismatch; pass the same --review flag as the original run"
+            )
+        if not ckpt.todos:
+            raise RuntimeError("checkpoint contains no todos")
+        if ckpt.implement_next_index < 0 or ckpt.implement_next_index > len(ckpt.todos):
+            raise RuntimeError("checkpoint implement_next_index is out of range")
+
     def run(self) -> OrchestratorResult:
-        has_git = self._git.is_repo()
+        cfg = self._config
+        sid = (cfg.resume_session_id or "").strip()
+        if sid and cfg.executor != "cursor":
+            raise RuntimeError("--resume SESSION_ID requires --executor cursor")
+        if sid and not session_checkpoint_path(cfg.repo_root, sid).is_file():
+            expect = session_checkpoint_path(cfg.repo_root, sid)
+            raise RuntimeError(
+                f"no saved state for session_id {sid!r}; expected {expect} "
+                "(~/.agent-todo/checkpoint/sessions/; override with AGENT_TODO_CHECKPOINT_DIR)"
+            )
+
+        try:
+            return self._run_inner(
+                resume_session_id=sid or None,
+                use_cursor_state=self._use_cursor_state(),
+                has_git_initial=self._git.is_repo(),
+            )
+        finally:
+            clear_active_checkpoint()
+
+    def _run_inner(
+        self,
+        *,
+        resume_session_id: str | None,
+        use_cursor_state: bool,
+        has_git_initial: bool,
+    ) -> OrchestratorResult:
+        cfg = self._config
+        has_git = has_git_initial
         branch = "(no-git)"
-        if has_git:
+        session_id: str | None = None
+        plan_text = ""
+        todos: list[TodoItem] = []
+        ckpt: RunCheckpoint | None = None
+
+        if use_cursor_state and resume_session_id:
+            path = session_checkpoint_path(cfg.repo_root, resume_session_id)
+            ckpt = read_checkpoint(path)
+            self._validate_checkpoint(ckpt)
+            if ckpt.session_id != resume_session_id:
+                raise RuntimeError("checkpoint session_id does not match --resume value")
+            plan_text = ckpt.plan_text
+            todos = [
+                TodoItem(id=str(t["id"]), content=str(t["content"]))
+                for t in ckpt.todos
+            ]
+            session_id = ckpt.session_id
+            branch = ckpt.run_branch or "(no-git)"
+            if has_git:
+                self._git.ensure_repo()
+                if ckpt.run_branch:
+                    self._git.checkout_branch(ckpt.run_branch)
+        elif has_git:
             self._git.ensure_repo()
             branch = self._git.create_run_branch("agent-todo-run")
 
-        docs = collect_requirement_context(
-            md_path=self._config.md_path,
-            text_snippets=list(self._config.text_snippets),
-            image_paths=list(self._config.image_paths),
-            image_urls=list(self._config.image_urls),
-        )
-        plan_prompt = build_plan_prompt(docs)
-        plan_run = run_cursor_agent(
-            CursorAgentConfig(
-                workspace=self._config.repo_root,
-                run_cwd=self._todo_run_cwd(),
-                model=self._config.cursor_model,
-                force=self._config.cursor_force,
-                output_format="text",
-                stream_partial_output=False,
-            ),
-            prompt=plan_prompt,
-        )
-        if plan_run.exit_code != 0:
-            raise RuntimeError(
-                f"cursor-agent plan generation failed (exit={plan_run.exit_code}): "
-                f"{plan_run.stderr or plan_run.stdout}"
+        if not (use_cursor_state and resume_session_id):
+            docs = collect_requirement_context(
+                md_path=cfg.md_path,
+                text_snippets=list(cfg.text_snippets),
+                image_paths=list(cfg.image_paths),
+                image_urls=list(cfg.image_urls),
             )
-        plan_text = plan_run.stdout
-        todos = parse_plan_text_to_todos(plan_text)
+            plan_prompt = build_plan_prompt(docs)
+            plan_run = run_cursor_agent(
+                CursorAgentConfig(
+                    workspace=cfg.repo_root,
+                    run_cwd=self._todo_run_cwd(),
+                    model=cfg.cursor_model,
+                    force=cfg.cursor_force,
+                    output_format="text",
+                    stream_partial_output=False,
+                ),
+                prompt=plan_prompt,
+            )
+            if plan_run.exit_code != 0:
+                raise RuntimeError(
+                    f"cursor-agent plan generation failed (exit={plan_run.exit_code}): "
+                    f"{plan_run.stderr or plan_run.stdout}"
+                )
+            plan_text = plan_run.stdout
+            todos = parse_plan_text_to_todos(plan_text)
+            if use_cursor_state:
+                ckpt = RunCheckpoint(
+                    repo_root=str(cfg.repo_root.resolve()),
+                    md_path=str(cfg.md_path.resolve()) if cfg.md_path else None,
+                    text_snippets=list(cfg.text_snippets),
+                    image_paths=[str(p.resolve()) for p in cfg.image_paths],
+                    image_urls=list(cfg.image_urls),
+                    run_branch=branch if branch != "(no-git)" else None,
+                    plan_text=plan_text,
+                    todos=[t.model_dump() for t in todos],
+                    session_id=None,
+                    phase="implement",
+                    implement_next_index=0,
+                    enable_review=cfg.enable_review,
+                )
+                self._persist_checkpoint(ckpt)
 
         cursor_runs: list[dict] = []
-        session_id: str | None = None
         cursor_base = CursorAgentConfig(
-            workspace=self._config.repo_root,
+            workspace=cfg.repo_root,
             run_cwd=self._todo_run_cwd(),
-            model=self._config.cursor_model,
-            force=self._config.cursor_force,
+            model=cfg.cursor_model,
+            force=cfg.cursor_force,
             output_format="json",
             stream_partial_output=False,
         )
-        if self._config.executor == "cursor":
-            for todo in todos:
+        if cfg.executor == "cursor":
+            assert ckpt is not None or not use_cursor_state
+            for idx, todo in enumerate(todos):
+                if use_cursor_state:
+                    assert ckpt is not None
+                    if idx < ckpt.implement_next_index:
+                        continue
+                    ckpt.implement_next_index = idx
+                    ckpt.session_id = session_id
+                    self._persist_checkpoint(ckpt)
                 prompt = build_cursor_agent_prompt_for_todo(
                     todo, repo_snapshot_hint=self._snapshot_hint()
                 )
-                cfg = replace(cursor_base, resume_session_id=session_id)
-                run = run_cursor_agent(cfg, prompt=prompt)
+                cfg_run = replace(cursor_base, resume_session_id=session_id)
+                run = run_cursor_agent(cfg_run, prompt=prompt)
                 cursor_runs.append(run.model_dump())
                 if run.exit_code != 0:
+                    if use_cursor_state and ckpt is not None:
+                        self._persist_checkpoint(ckpt)
                     raise RuntimeError(f"cursor-agent failed (exit={run.exit_code})")
                 if session_id is None:
                     if not run.session_id:
@@ -153,6 +281,12 @@ class Orchestrator:
                             "need --output-format json and a successful run"
                         )
                     session_id = run.session_id
+                else:
+                    session_id = run.session_id or session_id
+                if use_cursor_state and ckpt is not None:
+                    ckpt.session_id = session_id
+                    ckpt.implement_next_index = idx + 1
+                    self._persist_checkpoint(ckpt)
                 if has_git and self._git.has_worktree_changes():
                     self._git.add_all()
                     self._git.commit(f"implement todo {todo.id}")
@@ -161,12 +295,12 @@ class Orchestrator:
             if has_git:
                 self._git.add_all()
                 self._git.commit("implement todos")
-        gates = run_quality_gates(self._config.repo_root)
+        gates = run_quality_gates(cfg.repo_root)
 
         rounds = 0
         review_dump: dict = {"findings": []}
-        if self._config.enable_review:
-            while has_git and rounds < self._config.max_review_rounds:
+        if cfg.enable_review:
+            while has_git and rounds < cfg.max_review_rounds:
                 rounds += 1
                 diff = self._git.diff()
                 review = self._reviewer.review(diff=diff, gates_output=gates.output)
@@ -179,15 +313,18 @@ class Orchestrator:
                     TodoItem(id=f"review-{i+1}", content=f"{f.level}: {f.message}")
                     for i, f in enumerate(review.findings)
                 ]
-                if self._config.executor == "cursor":
+                if cfg.executor == "cursor":
                     for fix_todo in fix_todos:
                         prompt = build_cursor_agent_prompt_for_todo(
                             fix_todo, repo_snapshot_hint=self._snapshot_hint()
                         )
-                        cfg = replace(cursor_base, resume_session_id=session_id)
-                        run = run_cursor_agent(cfg, prompt=prompt)
+                        cfg_run = replace(cursor_base, resume_session_id=session_id)
+                        run = run_cursor_agent(cfg_run, prompt=prompt)
                         cursor_runs.append(run.model_dump())
                         if run.exit_code != 0:
+                            if use_cursor_state and ckpt is not None:
+                                ckpt.session_id = session_id
+                                self._persist_checkpoint(ckpt)
                             raise RuntimeError(f"cursor-agent failed (exit={run.exit_code})")
                         if session_id is None:
                             if not run.session_id:
@@ -195,15 +332,26 @@ class Orchestrator:
                                     "cursor-agent JSON missing session_id on first review fix"
                                 )
                             session_id = run.session_id
-                        gates = run_quality_gates(self._config.repo_root)
+                        else:
+                            session_id = run.session_id or session_id
+                        if use_cursor_state and ckpt is not None:
+                            ckpt.session_id = session_id
+                            self._persist_checkpoint(ckpt)
+                        gates = run_quality_gates(cfg.repo_root)
                         if self._git.has_worktree_changes():
                             self._git.add_all()
                             self._git.commit(f"review fix r{rounds} {fix_todo.id}")
                 else:
                     self._executor.execute(fix_todos, repo_snapshot_hint=self._snapshot_hint())
-                    gates = run_quality_gates(self._config.repo_root)
+                    gates = run_quality_gates(cfg.repo_root)
                     self._git.add_all()
                     self._git.commit(f"review fix round {rounds}")
+
+        if use_cursor_state:
+            root = cfg.repo_root.resolve()
+            in_progress_checkpoint_path(root).unlink(missing_ok=True)
+            if session_id:
+                session_checkpoint_path(root, session_id).unlink(missing_ok=True)
 
         return OrchestratorResult(
             branch=branch,

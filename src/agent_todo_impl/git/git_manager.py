@@ -40,6 +40,10 @@ class GitManager:
         self._run(["git", "checkout", "-b", name])
         return name
 
+    def checkout_branch(self, name: str) -> None:
+        """Switch to an existing branch (used when resuming from checkpoint)."""
+        self._run(["git", "checkout", name])
+
     def add_all(self) -> None:
         self._run(["git", "add", "-A"])
 

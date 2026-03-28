@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import signal
 from pathlib import Path
 from typing import Optional
 
 import typer
 
+from agent_todo_impl.checkpoint import flush_active_checkpoint
 from agent_todo_impl.execution.cursor_agent import (
     CursorAgentConfig,
     build_cursor_agent_command,
@@ -176,6 +178,15 @@ def run(
         "--review",
         help="启用 code review 与修复循环（最多 3 轮）；默认关闭",
     ),
+    resume_session_id: Optional[str] = typer.Option(
+        None,
+        "--resume",
+        metavar="SESSION_ID",
+        help=(
+            "仅 --executor cursor：用上轮 JSON 里的 session_id 续跑；"
+            "状态在 ~/.agent-todo/checkpoint/。不传则新会话；首条成功后写入 sessions/"
+        ),
+    ),
 ):
     """完整闭环：plan -> implement -> 可选 review -> 自动提交（独立分支）。"""
     _require_at_least_one_source(md_path, text, image, image_url)
@@ -186,6 +197,7 @@ def run(
         )
     anchor = (md_path or Path.cwd()).resolve()
     repo_root = resolve_project_root(Path.cwd(), anchor)
+    rsid = (resume_session_id or "").strip() or None
     orchestrator = Orchestrator(
         OrchestratorConfig(
             repo_root=repo_root,
@@ -200,11 +212,23 @@ def run(
             text_snippets=tuple(text),
             image_paths=tuple(image),
             image_urls=tuple(image_url),
+            resume_session_id=rsid,
         )
     )
+
+    prev_sigint = None
+    if executor == "cursor":
+        def _on_sigint(_signum: int, _frame: object) -> None:
+            flush_active_checkpoint()
+            raise KeyboardInterrupt
+
+        prev_sigint = signal.signal(signal.SIGINT, _on_sigint)
     try:
         result = orchestrator.run()
     except EmptyRequirementContentError as e:
         typer.secho(str(e), err=True)
         raise typer.Exit(code=2) from e
+    finally:
+        if prev_sigint is not None:
+            signal.signal(signal.SIGINT, prev_sigint)
     typer.echo(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
