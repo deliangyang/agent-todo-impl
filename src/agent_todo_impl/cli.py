@@ -17,6 +17,7 @@ from agent_todo_impl.execution.cursor_agent import (
     run_cursor_agent,
     todo_run_cwd_for_md_path,
 )
+from agent_todo_impl.execution.external_cli import EXTERNAL_CLI_EXECUTORS
 from agent_todo_impl.mdscan import EmptyRequirementContentError, collect_requirement_context
 from agent_todo_impl.orchestrator import Orchestrator, OrchestratorConfig
 from agent_todo_impl.planning.plan_generator import build_plan_prompt
@@ -24,6 +25,8 @@ from agent_todo_impl.planning.plan_parser import parse_plan_text_to_todos
 from agent_todo_impl.project_scan import resolve_project_root
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+_RUN_EXECUTORS = frozenset({"internal", "cursor", *EXTERNAL_CLI_EXECUTORS})
 
 
 def _require_at_least_one_source(
@@ -162,7 +165,10 @@ def run(
         help="图片 URL，可重复",
     ),
     model: str = typer.Option("gpt-4.1-mini", envvar="AGENT_TODO_MODEL"),
-    executor: str = typer.Option("internal", help="执行器：internal | cursor"),
+    executor: str = typer.Option(
+        "internal",
+        help="执行器：internal | cursor | copilot | codex | gemini",
+    ),
     cursor_model: Optional[str] = typer.Option(None, help="cursor-agent 使用的 model（默认 auto）"),
     cursor_force: bool = typer.Option(True, help="cursor-agent 允许强制执行（--force）"),
     cursor_output_format: str = typer.Option(
@@ -190,7 +196,13 @@ def run(
 ):
     """完整闭环：plan -> implement -> 可选 review -> 自动提交（独立分支）。"""
     _require_at_least_one_source(md_path, text, image, image_url)
-    if executor == "cursor":
+    if executor not in _RUN_EXECUTORS:
+        typer.secho(
+            f"未知的 --executor {executor!r}；可选：{', '.join(sorted(_RUN_EXECUTORS))}",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if executor == "cursor" or executor in EXTERNAL_CLI_EXECUTORS:
         logging.basicConfig(
             level=logging.INFO,
             format="%(levelname)s %(name)s: %(message)s",

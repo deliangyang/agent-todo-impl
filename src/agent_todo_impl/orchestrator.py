@@ -18,6 +18,12 @@ from agent_todo_impl.execution.cursor_agent import (
     run_cursor_agent,
     todo_run_cwd_for_md_path,
 )
+from agent_todo_impl.execution.external_cli import (
+    EXTERNAL_CLI_EXECUTORS,
+    ExternalCliConfig,
+    build_external_cli_prompt_for_todo,
+    run_external_cli,
+)
 from agent_todo_impl.execution.executor import Executor, ExecutorConfig
 from agent_todo_impl.git.git_manager import GitManager
 from agent_todo_impl.llm.openai_client import OpenAIClient, OpenAIClientConfig
@@ -35,7 +41,7 @@ class OrchestratorConfig:
     model: str
     enable_review: bool = False
     max_review_rounds: int = 3
-    executor: str = "internal"  # internal | cursor
+    executor: str = "internal"  # internal | cursor | copilot | codex | gemini
     cursor_model: str = "auto"
     cursor_force: bool = True
     cursor_output_format: str = "text"  # text | json | stream-json
@@ -57,6 +63,7 @@ class OrchestratorResult:
     gates_output: str
     review: dict
     cursor: dict | None = None
+    cli: dict | None = None
 
     def model_dump(self) -> dict:
         return {
@@ -68,6 +75,7 @@ class OrchestratorResult:
             "gates_output": self.gates_output,
             "review": self.review,
             "cursor": self.cursor,
+            "cli": self.cli,
         }
 
 
@@ -246,6 +254,7 @@ class Orchestrator:
                 self._persist_checkpoint(ckpt)
 
         cursor_runs: list[dict] = []
+        cli_runs: list[dict] = []
         cursor_base = CursorAgentConfig(
             workspace=cfg.repo_root,
             run_cwd=self._todo_run_cwd(),
@@ -253,6 +262,11 @@ class Orchestrator:
             force=cfg.cursor_force,
             output_format="json",
             stream_partial_output=False,
+        )
+        external_cli_base = ExternalCliConfig(
+            workspace=cfg.repo_root,
+            run_cwd=self._todo_run_cwd(),
+            model=cfg.cursor_model,
         )
         if cfg.executor == "cursor":
             assert ckpt is not None or not use_cursor_state
@@ -287,6 +301,23 @@ class Orchestrator:
                     ckpt.session_id = session_id
                     ckpt.implement_next_index = idx + 1
                     self._persist_checkpoint(ckpt)
+                if has_git and self._git.has_worktree_changes():
+                    self._git.add_all()
+                    self._git.commit(f"implement todo {todo.id}")
+        elif cfg.executor in EXTERNAL_CLI_EXECUTORS:
+            for todo in todos:
+                prompt = build_external_cli_prompt_for_todo(
+                    cfg.executor,
+                    todo,
+                    repo_snapshot_hint=self._snapshot_hint(),
+                )
+                run = run_external_cli(cfg.executor, external_cli_base, prompt=prompt)
+                cli_runs.append(run.model_dump())
+                if run.exit_code != 0:
+                    raise RuntimeError(
+                        f"{cfg.executor} CLI failed (exit={run.exit_code}): "
+                        f"{run.stderr or run.stdout}"
+                    )
                 if has_git and self._git.has_worktree_changes():
                     self._git.add_all()
                     self._git.commit(f"implement todo {todo.id}")
@@ -341,6 +372,24 @@ class Orchestrator:
                         if self._git.has_worktree_changes():
                             self._git.add_all()
                             self._git.commit(f"review fix r{rounds} {fix_todo.id}")
+                elif cfg.executor in EXTERNAL_CLI_EXECUTORS:
+                    for fix_todo in fix_todos:
+                        prompt = build_external_cli_prompt_for_todo(
+                            cfg.executor,
+                            fix_todo,
+                            repo_snapshot_hint=self._snapshot_hint(),
+                        )
+                        run = run_external_cli(cfg.executor, external_cli_base, prompt=prompt)
+                        cli_runs.append(run.model_dump())
+                        if run.exit_code != 0:
+                            raise RuntimeError(
+                                f"{cfg.executor} CLI failed (exit={run.exit_code}): "
+                                f"{run.stderr or run.stdout}"
+                            )
+                        gates = run_quality_gates(cfg.repo_root)
+                        if self._git.has_worktree_changes():
+                            self._git.add_all()
+                            self._git.commit(f"review fix r{rounds} {fix_todo.id}")
                 else:
                     self._executor.execute(fix_todos, repo_snapshot_hint=self._snapshot_hint())
                     gates = run_quality_gates(cfg.repo_root)
@@ -362,4 +411,9 @@ class Orchestrator:
             gates_output=gates.output,
             review=review_dump,
             cursor={"runs": cursor_runs} if cursor_runs else None,
+            cli=(
+                {"executor": cfg.executor, "runs": cli_runs}
+                if cli_runs
+                else None
+            ),
         )
