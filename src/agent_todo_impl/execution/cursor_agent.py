@@ -133,15 +133,49 @@ def cursor_agent_command_string(cmd: list[str]) -> str:
 
 
 def _stream_pipe_to_terminal(pipe, tee, parts: list[str]) -> None:
-    """Read subprocess pipe in chunks; echo to tee and append to parts (for model_dump)."""
+    """Read subprocess pipe; echo to tee and append to parts.
+
+    For stdout, we keep a rolling window of the last 10 lines and render them
+    in a dim gray color, similar to cursor-agent CLI. Stderr is streamed
+    directly without windowing.
+    """
+    max_lines = 10
+    is_stdout = tee is sys.stdout
+    buffer = ""
+    lines: list[str] = []
+    printed_lines = 0
+
+    def _render_window() -> None:
+        nonlocal printed_lines
+        # Move cursor up to the beginning of the window and clear it.
+        if printed_lines:
+            sys.stdout.write(f"\x1b[{printed_lines}F")
+            sys.stdout.write("\x1b[J")
+        printed_lines = len(lines)
+        gray_prefix = "\x1b[90m"
+        reset = "\x1b[0m"
+        for line in lines:
+            sys.stdout.write(f"{gray_prefix}{line}{reset}\n")
+        sys.stdout.flush()
+
     try:
         while True:
             chunk = pipe.read(4096)
             if not chunk:
                 break
             parts.append(chunk)
-            tee.write(chunk)
-            tee.flush()
+            if not is_stdout:
+                tee.write(chunk)
+                tee.flush()
+                continue
+
+            buffer += chunk
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                lines.append(line)
+                if len(lines) > max_lines:
+                    lines = lines[-max_lines:]
+            _render_window()
     finally:
         pipe.close()
 
