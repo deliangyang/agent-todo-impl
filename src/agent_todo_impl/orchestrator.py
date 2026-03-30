@@ -222,14 +222,15 @@ class Orchestrator:
                 image_urls=list(cfg.image_urls),
             )
             plan_prompt = build_plan_prompt(docs)
+            # Always force stream-json for plan phase for best terminal UX
             plan_run = run_cursor_agent(
                 CursorAgentConfig(
                     workspace=cfg.repo_root,
                     run_cwd=self._todo_run_cwd(),
                     model=cfg.cursor_model,
                     force=cfg.cursor_force,
-                    output_format=cfg.cursor_output_format,
-                    stream_partial_output=cfg.cursor_stream_partial_output,
+                    output_format="stream-json",
+                    stream_partial_output=True,
                 ),
                 prompt=plan_prompt,
             )
@@ -238,7 +239,7 @@ class Orchestrator:
                     f"cursor-agent plan generation failed (exit={plan_run.exit_code}): "
                     f"{plan_run.stderr or plan_run.stdout}"
                 )
-            _, plan_text = extract_result_text(plan_run.stdout, cfg.cursor_output_format)
+            _, plan_text = extract_result_text(plan_run.stdout, "stream-json")
             todos = parse_plan_text_to_todos(plan_text)
             if use_cursor_state:
                 ckpt = RunCheckpoint(
