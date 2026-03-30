@@ -45,6 +45,7 @@ def _require_at_least_one_source(
 
 def _repo_root_and_run_cwd(md_path: Optional[Path]) -> tuple[Path, Path]:
     anchor = (md_path or Path.cwd()).resolve()
+    print(Path.cwd(), anchor)
     repo_root = resolve_project_root(Path.cwd(), anchor)
     run_cwd = todo_run_cwd_for_md_path(md_path) if md_path is not None else Path.cwd().resolve()
     return repo_root, run_cwd
@@ -95,13 +96,14 @@ def plan(
         typer.secho(str(e), err=True)
         raise typer.Exit(code=2) from e
     prompt = build_plan_prompt(ctx)
-    repo_root, run_cwd = _repo_root_and_run_cwd(md_path)
+    current_dir = Path.cwd().resolve()
     run = run_cursor_agent(
         CursorAgentConfig(
-            workspace=repo_root,
-            run_cwd=run_cwd,
+            workspace=current_dir,
+            run_cwd=current_dir,
             model=cursor_model or "auto",
-            output_format="text",
+            output_format="json",
+            stream_partial_output=True,
         ),
         prompt=prompt,
     )
@@ -116,7 +118,7 @@ def plan(
             repo_snapshot_hint="python project with pyproject.toml, src/agent_todo_impl, tests/",
         )
         cmd = build_cursor_agent_command(
-            CursorAgentConfig(workspace=repo_root, run_cwd=run_cwd, model=cursor_model or "auto"),
+            CursorAgentConfig(workspace=current_dir, run_cwd=current_dir, model=cursor_model or "auto", output_format="json", stream_partial_output=True),
             prompt=cursor_prompt,
         )
         cursor_payload = {
