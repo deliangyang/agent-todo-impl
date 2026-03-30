@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,3 +61,43 @@ class GitManager:
     def has_worktree_changes(self) -> bool:
         """True if there are staged/unstaged/untracked changes vs HEAD."""
         return bool(self.status_porcelain())
+
+
+def discover_git_repos(work_dir: Path, *, max_depth: int = 5) -> list[Path]:
+    """Discover git repositories under work_dir (including itself)."""
+    root = work_dir.resolve()
+    if not root.is_dir():
+        return []
+
+    repos: list[Path] = []
+    for dirpath, dirnames, _filenames in os.walk(root):
+        p = Path(dirpath)
+        try:
+            rel = p.relative_to(root)
+        except ValueError:
+            continue
+        depth = len(rel.parts)
+        if depth > max_depth:
+            dirnames[:] = []
+            continue
+
+        # Never walk into nested git internals.
+        dirnames[:] = [d for d in dirnames if d not in {".git", "node_modules", "__pycache__"}]
+
+        if (p / ".git").exists():
+            repos.append(p)
+
+    repos.sort(key=lambda x: str(x))
+    return repos
+
+
+def commit_changed_repos(work_dir: Path, message: str, *, max_depth: int = 5) -> list[tuple[Path, str]]:
+    """Stage and commit changes in each changed repo under work_dir."""
+    commits: list[tuple[Path, str]] = []
+    for repo in discover_git_repos(work_dir, max_depth=max_depth):
+        gm = GitManager(repo)
+        if gm.has_worktree_changes():
+            gm.add_all()
+            sha = gm.commit(message)
+            commits.append((repo, sha))
+    return commits

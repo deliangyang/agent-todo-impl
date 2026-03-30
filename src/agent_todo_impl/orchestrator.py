@@ -25,7 +25,7 @@ from agent_todo_impl.execution.external_cli import (
     run_external_cli,
 )
 from agent_todo_impl.execution.executor import Executor, ExecutorConfig
-from agent_todo_impl.git.git_manager import GitManager
+from agent_todo_impl.git.git_manager import GitManager, commit_changed_repos
 from agent_todo_impl.llm.openai_client import OpenAIClient, OpenAIClientConfig
 from agent_todo_impl.mdscan import collect_requirement_context
 from agent_todo_impl.planning.plan_generator import build_plan_prompt
@@ -114,6 +114,9 @@ class Orchestrator:
 
     def _use_cursor_state(self) -> bool:
         return self._config.executor == "cursor"
+
+    def _commit_changed_repositories(self, message: str) -> None:
+        commit_changed_repos(self._todo_run_cwd(), message)
 
     def _persist_checkpoint(self, ckpt: RunCheckpoint) -> None:
         if not self._use_cursor_state():
@@ -301,9 +304,7 @@ class Orchestrator:
                     ckpt.session_id = session_id
                     ckpt.implement_next_index = idx + 1
                     self._persist_checkpoint(ckpt)
-                if has_git and self._git.has_worktree_changes():
-                    self._git.add_all()
-                    self._git.commit(f"implement todo {todo.id} {todo.content}")
+                self._commit_changed_repositories(f"implement todo {todo.id} {todo.content}")
         elif cfg.executor in EXTERNAL_CLI_EXECUTORS:
             for todo in todos:
                 prompt = build_external_cli_prompt_for_todo(
@@ -318,14 +319,12 @@ class Orchestrator:
                         f"{cfg.executor} CLI failed (exit={run.exit_code}): "
                         f"{run.stderr or run.stdout}"
                     )
-                if has_git and self._git.has_worktree_changes():
-                    self._git.add_all()
-                    self._git.commit(f"implement todo {todo.id} {todo.content}")
+                self._commit_changed_repositories(f"implement todo {todo.id} {todo.content}")
         else:
             self._executor.execute(todos, repo_snapshot_hint=self._snapshot_hint())
-            if has_git:
-                self._git.add_all()
-                self._git.commit("implement todos")
+            todo_summary = "; ".join(f"{t.id}:{t.content}" for t in todos)[:180]
+            message = f"implement todos {todo_summary}" if todo_summary else "implement todos"
+            self._commit_changed_repositories(message)
         gates = run_quality_gates(cfg.repo_root)
 
         rounds = 0
@@ -369,9 +368,9 @@ class Orchestrator:
                             ckpt.session_id = session_id
                             self._persist_checkpoint(ckpt)
                         gates = run_quality_gates(cfg.repo_root)
-                        if self._git.has_worktree_changes():
-                            self._git.add_all()
-                            self._git.commit(f"review fix r{rounds} {fix_todo.id} {fix_todo.content}")
+                        self._commit_changed_repositories(
+                            f"review fix r{rounds} {fix_todo.id} {fix_todo.content}"
+                        )
                 elif cfg.executor in EXTERNAL_CLI_EXECUTORS:
                     for fix_todo in fix_todos:
                         prompt = build_external_cli_prompt_for_todo(
@@ -387,14 +386,13 @@ class Orchestrator:
                                 f"{run.stderr or run.stdout}"
                             )
                         gates = run_quality_gates(cfg.repo_root)
-                        if self._git.has_worktree_changes():
-                            self._git.add_all()
-                            self._git.commit(f"review fix r{rounds} {fix_todo.id} {fix_todo.content}")
+                        self._commit_changed_repositories(
+                            f"review fix r{rounds} {fix_todo.id} {fix_todo.content}"
+                        )
                 else:
                     self._executor.execute(fix_todos, repo_snapshot_hint=self._snapshot_hint())
                     gates = run_quality_gates(cfg.repo_root)
-                    self._git.add_all()
-                    self._git.commit(f"review fix round {rounds}")
+                    self._commit_changed_repositories(f"review fix round {rounds}")
 
         if use_cursor_state:
             root = cfg.repo_root.resolve()
