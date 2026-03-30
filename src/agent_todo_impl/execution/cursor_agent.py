@@ -174,16 +174,155 @@ def cursor_agent_command_string(cmd: list[str]) -> str:
     return " ".join(shlex.quote(x) for x in cmd)
 
 
-def _stream_pipe_to_terminal(pipe, tee, parts: list[str]) -> None:
+# ---------------------------------------------------------------------------
+# ANSI styling constants (stream-json terminal renderer)
+# ---------------------------------------------------------------------------
+_R = "\x1b[0m"       # reset
+_GRAY = "\x1b[90m"   # dim gray  — thinking text
+_DIM = "\x1b[2m"     # dim       — thinking prefix / tool results
+_ITALIC = "\x1b[3m"  # italic    — thinking
+_CYAN = "\x1b[36m"   # cyan      — tool-use name
+_BOLD = "\x1b[1m"    # bold      — tool-use name
+_YELLOW = "\x1b[33m" # yellow    — tool result preview
+
+
+def _render_stream_json_line(line: str, state: dict) -> str | None:
+    """Render one NDJSON line from ``--output-format stream-json`` to a
+    terminal string with ANSI styling.
+
+    ``state`` is a mutable ``dict`` shared across successive calls::
+
+        {"last": None}  # tracks last printed content-type for separator logic
+
+    Returns a string to ``write()`` to stdout, or ``None`` to skip the line.
+
+    Handled event / content types
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    * ``assistant / text``     — plain white, streamed token-by-token.
+    * ``assistant / thinking`` — dim gray italic w/ ``💭`` prefix on entry.
+    * ``assistant / tool_use`` — cyan bold ``● name(key: val …)`` on its own line.
+    * ``tool_result``          — dim ``→ preview`` indented line.
+    """
+    try:
+        data = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    event_type = data.get("type")
+
+    # ------------------------------------------------------------------
+    # assistant events: iterate over content blocks
+    # ------------------------------------------------------------------
+    if event_type == "assistant":
+        msg = data.get("message") or {}
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list) or not content:
+            return None
+
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            ctype = item.get("type")
+
+            if ctype == "text":
+                text = item.get("text") or ""
+                if not text:
+                    continue
+                # Separate from a thinking / tool block with a newline.
+                if state["last"] in ("thinking", "tool_use"):
+                    parts.append("\n")
+                parts.append(text)
+                state["last"] = "text"
+
+            elif ctype == "thinking":
+                thinking = item.get("thinking") or ""
+                if not thinking:
+                    continue
+                # Header on first thinking token of a new thinking block.
+                if state["last"] != "thinking":
+                    prefix = "\n" if state["last"] else ""
+                    parts.append(f"{prefix}{_DIM}{_ITALIC}{_GRAY}💭 ")
+                parts.append(f"{_DIM}{_ITALIC}{_GRAY}{thinking}{_R}")
+                state["last"] = "thinking"
+
+            elif ctype == "tool_use":
+                name = item.get("name") or "unknown_tool"
+                inp = item.get("input") or {}
+                sep = "\n" if state["last"] else ""
+                if isinstance(inp, dict) and inp:
+                    inp_str = ", ".join(
+                        f"{k}: {repr(v)[:50]}" for k, v in list(inp.items())[:4]
+                    )
+                    parts.append(f"{sep}{_CYAN}{_BOLD}● {name}({inp_str}){_R}\n")
+                else:
+                    parts.append(f"{sep}{_CYAN}{_BOLD}● {name}(){_R}\n")
+                state["last"] = "tool_use"
+
+        return "".join(parts) or None
+
+    # ------------------------------------------------------------------
+    # tool_result events: show a brief indented preview
+    # ------------------------------------------------------------------
+    if event_type == "tool_result":
+        content = data.get("content") or []
+        if isinstance(content, list):
+            texts = [
+                (c.get("text") or "")[:120]
+                for c in content
+                if isinstance(c, dict) and c.get("type") == "text"
+            ]
+            if texts:
+                preview = texts[0].replace("\n", " ").strip()
+                state["last"] = "tool_result"
+                return f"  {_DIM}{_YELLOW}→ {preview}{_R}\n"
+        return None
+
+    return None
+
+
+def _stream_pipe_to_terminal(pipe, tee, parts: list[str], *, stream_json: bool = False) -> None:
     """Read subprocess pipe; echo to tee and append to parts.
 
-    For stdout, we keep a rolling window of the last 10 lines and render them
-    in a dim gray color, similar to cursor-agent CLI. Stderr is streamed
-    directly without windowing.
+    For stdout with ``stream_json=True`` the pipe carries stream-json NDJSON.
+    Each line is decoded and rendered with ANSI styling (see
+    ``_render_stream_json_line``).  Raw JSON is never echoed.
+
+    For plain stdout (``stream_json=False``) we keep a rolling window of the
+    last 10 lines in dim gray.  Stderr is streamed directly without windowing.
     """
-    max_lines = 10
     is_stdout = tee is sys.stdout
     buffer = ""
+
+    # ---- stream-json mode: styled real-time rendering ----
+    if is_stdout and stream_json:
+        render_state: dict = {"last": None}
+        try:
+            while True:
+                chunk = pipe.read(4096)
+                if not chunk:
+                    break
+                parts.append(chunk)
+                buffer += chunk
+                while "\n" in buffer:
+                    ndjson_line, buffer = buffer.split("\n", 1)
+                    ndjson_line = ndjson_line.strip()
+                    if not ndjson_line:
+                        continue
+                    rendered = _render_stream_json_line(ndjson_line, render_state)
+                    if rendered is not None:
+                        sys.stdout.write(rendered)
+                        sys.stdout.flush()
+        finally:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            pipe.close()
+        return
+
+    # ---- default mode: rolling window for stdout, passthrough for stderr ----
+    max_lines = 10
     lines: list[str] = []
     printed_lines = 0
 
@@ -258,9 +397,11 @@ def run_cursor_agent(cfg: CursorAgentConfig, *, prompt: str) -> CursorAgentRunRe
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    use_stream_json = cfg.output_format == "stream-json"
     t_out = threading.Thread(
         target=_stream_pipe_to_terminal,
         args=(proc.stdout, sys.stdout, out_parts),
+        kwargs={"stream_json": use_stream_json},
     )
     t_err = threading.Thread(
         target=_stream_pipe_to_terminal,
