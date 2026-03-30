@@ -200,8 +200,11 @@ def run_cursor_agent(cfg: CursorAgentConfig, *, prompt: str) -> CursorAgentRunRe
     cmd = build_cursor_agent_command(cfg, prompt=prompt)
     cwd = (cfg.run_cwd or Path.cwd()).resolve()
     logger.info(
-        "cursor-agent 执行目录: %s 命令: %s",
+        "cursor-agent 执行目录: %s ",
         cwd,
+    )
+    logger.info(
+        'cursor-agent 命令: %s',
         _cursor_agent_command_for_log(cmd),
     )
     out_parts: list[str] = []
