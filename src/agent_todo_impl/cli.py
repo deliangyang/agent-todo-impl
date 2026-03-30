@@ -15,14 +15,12 @@ from agent_todo_impl.execution.cursor_agent import (
     build_cursor_agent_prompt,
     cursor_agent_command_string,
     run_cursor_agent,
-    todo_run_cwd_for_md_path,
 )
 from agent_todo_impl.execution.external_cli import EXTERNAL_CLI_EXECUTORS
 from agent_todo_impl.mdscan import EmptyRequirementContentError, collect_requirement_context
 from agent_todo_impl.orchestrator import Orchestrator, OrchestratorConfig
 from agent_todo_impl.planning.plan_generator import build_plan_prompt
 from agent_todo_impl.planning.plan_parser import parse_plan_text_to_todos
-from agent_todo_impl.project_scan import resolve_project_root
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -44,10 +42,9 @@ def _require_at_least_one_source(
 
 
 def _repo_root_and_run_cwd(md_path: Optional[Path]) -> tuple[Path, Path]:
-    anchor = (md_path or Path.cwd()).resolve()
-    print(Path.cwd(), anchor)
-    repo_root = resolve_project_root(Path.cwd(), anchor)
-    run_cwd = todo_run_cwd_for_md_path(md_path) if md_path is not None else Path.cwd().resolve()
+    _ = md_path
+    repo_root = Path.cwd().resolve()
+    run_cwd = Path.cwd().resolve()
     return repo_root, run_cwd
 
 
@@ -209,8 +206,7 @@ def run(
             level=logging.INFO,
             format="%(levelname)s %(name)s: %(message)s",
         )
-    anchor = (md_path or Path.cwd()).resolve()
-    repo_root = resolve_project_root(Path.cwd(), anchor)
+    repo_root = Path.cwd().resolve()
     rsid = (resume_session_id or "").strip() or None
     orchestrator = Orchestrator(
         OrchestratorConfig(

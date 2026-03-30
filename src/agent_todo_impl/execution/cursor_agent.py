@@ -16,9 +16,13 @@ logger = logging.getLogger(__name__)
 
 
 def todo_run_cwd_for_md_path(md_path: Path) -> Path:
-    """Working directory for cursor-agent when the task is tied to a doc path (file or dir)."""
-    target = md_path.resolve()
-    return target if target.is_dir() else target.parent
+    """Use command invocation directory as the execution cwd.
+
+    Keep md_path in the signature for backward compatibility with existing
+    call sites, but do not derive runtime cwd from document location.
+    """
+    _ = md_path
+    return Path.cwd().resolve()
 
 
 @dataclass(frozen=True)
@@ -32,9 +36,9 @@ class CursorAgentConfig:
     # Continue the same chat as a previous successful JSON response (--resume <id>).
     resume_session_id: str | None = None
     # cursor-agent supports: text | json | stream-json
-    # We default to text to match cursor-agent CLI output (thinking/generate).
-    output_format: str = "text"
-    stream_partial_output: bool = False
+    # We default to json to match cursor-agent CLI output (thinking/generate).
+    output_format: str = "json"
+    stream_partial_output: bool = True
 
 
 @dataclass(frozen=True)
