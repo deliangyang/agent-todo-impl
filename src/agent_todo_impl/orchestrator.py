@@ -15,6 +15,7 @@ from agent_todo_impl.checkpoint import (
 from agent_todo_impl.execution.cursor_agent import (
     CursorAgentConfig,
     build_cursor_agent_prompt_for_todo,
+    extract_result_text,
     run_cursor_agent,
     todo_run_cwd_for_md_path,
 )
@@ -44,8 +45,8 @@ class OrchestratorConfig:
     executor: str = "internal"  # internal | cursor | copilot | codex | gemini
     cursor_model: str = "auto"
     cursor_force: bool = True
-    cursor_output_format: str = "text"  # text | json | stream-json
-    cursor_stream_partial_output: bool = False
+    cursor_output_format: str = "stream-json"  # text | json | stream-json
+    cursor_stream_partial_output: bool = True
     text_snippets: tuple[str, ...] = ()
     image_paths: tuple[Path, ...] = ()
     image_urls: tuple[str, ...] = ()
@@ -227,8 +228,8 @@ class Orchestrator:
                     run_cwd=self._todo_run_cwd(),
                     model=cfg.cursor_model,
                     force=cfg.cursor_force,
-                    output_format="text",
-                    stream_partial_output=False,
+                    output_format=cfg.cursor_output_format,
+                    stream_partial_output=cfg.cursor_stream_partial_output,
                 ),
                 prompt=plan_prompt,
             )
@@ -237,7 +238,7 @@ class Orchestrator:
                     f"cursor-agent plan generation failed (exit={plan_run.exit_code}): "
                     f"{plan_run.stderr or plan_run.stdout}"
                 )
-            plan_text = plan_run.stdout
+            _, plan_text = extract_result_text(plan_run.stdout, cfg.cursor_output_format)
             todos = parse_plan_text_to_todos(plan_text)
             if use_cursor_state:
                 ckpt = RunCheckpoint(
@@ -263,8 +264,8 @@ class Orchestrator:
             run_cwd=self._todo_run_cwd(),
             model=cfg.cursor_model,
             force=cfg.cursor_force,
-            output_format="json",
-            stream_partial_output=False,
+            output_format=cfg.cursor_output_format,
+            stream_partial_output=cfg.cursor_stream_partial_output,
         )
         external_cli_base = ExternalCliConfig(
             workspace=cfg.repo_root,
@@ -359,7 +360,8 @@ class Orchestrator:
                         if session_id is None:
                             if not run.session_id:
                                 raise RuntimeError(
-                                    "cursor-agent JSON missing session_id on first review fix"
+                                    "cursor-agent missing session_id on first review fix; "
+                                    "need --output-format json/stream-json and a successful run"
                                 )
                             session_id = run.session_id
                         else:

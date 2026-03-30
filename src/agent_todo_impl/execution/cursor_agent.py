@@ -36,8 +36,8 @@ class CursorAgentConfig:
     # Continue the same chat as a previous successful JSON response (--resume <id>).
     resume_session_id: str | None = None
     # cursor-agent supports: text | json | stream-json
-    # We default to json to match cursor-agent CLI output (thinking/generate).
-    output_format: str = "json"
+    # We default to stream-json for real-time streaming output.
+    output_format: str = "stream-json"
     stream_partial_output: bool = True
 
 
@@ -78,6 +78,44 @@ def parse_cursor_agent_json_stdout(stdout: str) -> tuple[str | None, str]:
     sid_str = sid if isinstance(sid, str) else None
     res_str = result if isinstance(result, str) else ""
     return sid_str, res_str
+
+
+def parse_cursor_agent_stream_json_stdout(stdout: str) -> tuple[str | None, str]:
+    """Parse cursor-agent `--output-format stream-json` NDJSON output.
+
+    Scans lines in reverse to find the last JSON object containing a ``result``
+    field (the terminal summary line). Returns (session_id, result text).
+    """
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if "result" in data:
+            sid = data.get("session_id")
+            result = data["result"]
+            sid_str = sid if isinstance(sid, str) else None
+            res_str = result if isinstance(result, str) else ""
+            return sid_str, res_str
+    return None, stdout
+
+
+def extract_result_text(stdout: str, output_format: str) -> tuple[str | None, str]:
+    """Unified result extractor for all cursor-agent output formats.
+
+    Returns (session_id, result_text) regardless of ``output_format``.
+    For ``text`` format, session_id is always None and result_text is the raw stdout.
+    """
+    if output_format == "json":
+        return parse_cursor_agent_json_stdout(stdout)
+    if output_format == "stream-json":
+        return parse_cursor_agent_stream_json_stdout(stdout)
+    return None, stdout
 
 
 def build_cursor_agent_prompt_for_todo(todo: TodoItem, *, repo_snapshot_hint: str) -> str:
@@ -236,8 +274,8 @@ def run_cursor_agent(cfg: CursorAgentConfig, *, prompt: str) -> CursorAgentRunRe
     stdout_full = "".join(out_parts).strip()
     stderr_full = "".join(err_parts).strip()
     session_id: str | None = None
-    if cfg.output_format == "json" and exit_code == 0:
-        session_id, _ = parse_cursor_agent_json_stdout(stdout_full)
+    if cfg.output_format in ("json", "stream-json") and exit_code == 0:
+        session_id, _ = extract_result_text(stdout_full, cfg.output_format)
     return CursorAgentRunResult(
         command=cmd,
         prompt=prompt,
