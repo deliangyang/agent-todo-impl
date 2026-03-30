@@ -303,7 +303,7 @@ class Orchestrator:
                     self._persist_checkpoint(ckpt)
                 if has_git and self._git.has_worktree_changes():
                     self._git.add_all()
-                    self._git.commit(f"implement todo {todo.id}")
+                    self._git.commit(f"implement todo {todo.id} {todo.content}")
         elif cfg.executor in EXTERNAL_CLI_EXECUTORS:
             for todo in todos:
                 prompt = build_external_cli_prompt_for_todo(
@@ -320,7 +320,7 @@ class Orchestrator:
                     )
                 if has_git and self._git.has_worktree_changes():
                     self._git.add_all()
-                    self._git.commit(f"implement todo {todo.id}")
+                    self._git.commit(f"implement todo {todo.id} {todo.content}")
         else:
             self._executor.execute(todos, repo_snapshot_hint=self._snapshot_hint())
             if has_git:
@@ -371,7 +371,7 @@ class Orchestrator:
                         gates = run_quality_gates(cfg.repo_root)
                         if self._git.has_worktree_changes():
                             self._git.add_all()
-                            self._git.commit(f"review fix r{rounds} {fix_todo.id}")
+                            self._git.commit(f"review fix r{rounds} {fix_todo.id} {fix_todo.content}")
                 elif cfg.executor in EXTERNAL_CLI_EXECUTORS:
                     for fix_todo in fix_todos:
                         prompt = build_external_cli_prompt_for_todo(
@@ -389,7 +389,7 @@ class Orchestrator:
                         gates = run_quality_gates(cfg.repo_root)
                         if self._git.has_worktree_changes():
                             self._git.add_all()
-                            self._git.commit(f"review fix r{rounds} {fix_todo.id}")
+                            self._git.commit(f"review fix r{rounds} {fix_todo.id} {fix_todo.content}")
                 else:
                     self._executor.execute(fix_todos, repo_snapshot_hint=self._snapshot_hint())
                     gates = run_quality_gates(cfg.repo_root)
